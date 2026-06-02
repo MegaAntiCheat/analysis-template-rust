@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::base::cheat_analyser_base::{CheatAnalyserState, Player, PlayerState};
 use steamid_ng::SteamID;
+use tf_demo_parser::demo::sendprop::SendPropIdentifier;
 
 const TELEPORT_DIST: f32 = 256.0;
 
@@ -48,7 +49,7 @@ impl JankGuard {
         &mut self,
         message: &tf_demo_parser::demo::message::Message,
         state: &CheatAnalyserState,
-        _parser_state: &tf_demo_parser::ParserState,
+        parser_state: &tf_demo_parser::ParserState,
         tick: tf_demo_parser::demo::data::DemoTick,
     ) {
         match message {
@@ -72,79 +73,31 @@ impl JankGuard {
                 }
                 _ => (),
             },
-            // Try to find firing events through tracers and player animations, thx to megascatterbomb for this snippet
+            // Try to find firing events through tracers and player animations, simplified from megascatterbomb's snippet
             tf_demo_parser::demo::message::Message::TempEntities(msg) => {
                 for event in &msg.events {
-                    match u16::from(event.class_id) {
-                        //Bullet tracer
-                        152 => {
-                            for prop in &event.props {
-                                match prop.identifier.names() {
-                                    Some((table_name, prop_name)) => {
-                                        if table_name == "DT_TEFireBullets"
-                                            && prop_name == "m_iPlayer"
-                                        {
-                                            let ent_id: i64 = match prop.value {
-                                        tf_demo_parser::demo::sendprop::SendPropValue::Integer(x) => x.try_into().unwrap_or_default(),
-                                        _ => {continue}
-                                    };
-                                            let entity_id =
-                                                tf_demo_parser::demo::message::EntityId::from(
-                                                    ent_id as u32,
-                                                );
-                                            match state
-                                                .entid_to_userid
-                                                .get(&entity_id)
-                                                .and_then(|userid| state.userid_to_id64.get(userid))
-                                            {
-                                                Some(id64) => {
-                                                    self.player_data
-                                                        .entry(*id64)
-                                                        .or_default()
-                                                        .last_fire = tick.into();
-                                                }
-                                                None => continue,
-                                            };
-                                        }
-                                    }
-                                    None => {}
-                                }
+                    let class = &parser_state.server_classes[usize::from(event.class_id)].name;
+                    if matches!(class.as_str(), "CTEFireBullets" | "CTEPlayerAnimEvent") {
+                        const BULLETS_PLAYER: SendPropIdentifier =
+                            SendPropIdentifier::new("DT_TEFireBullets", "m_iPlayer");
+                        const ANIM_PLAYER: SendPropIdentifier =
+                            SendPropIdentifier::new("DT_TEPlayerAnimEvent", "m_hPlayer");
+
+                        if let Some(prop) = event
+                            .props
+                            .iter()
+                            .find(|p| matches!(p.identifier, BULLETS_PLAYER | ANIM_PLAYER))
+                        {
+                            if let Some(id64) = i64::try_from(&prop.value)
+                                .ok()
+                                .and_then(|id| id.try_into().ok())
+                                .map(|id|crate::util::helpers::handle_to_entid(id))
+                                .and_then(|id| state.entid_to_userid.get(&id))
+                                .and_then(|uid| state.userid_to_id64.get(uid))
+                            {
+                                self.player_data.entry(*id64).or_default().last_fire = tick.into();
                             }
                         }
-                        // Animation
-                        165 => {
-                            for prop in &event.props {
-                                match prop.identifier.names() {
-                                    Some((table_name, prop_name)) => {
-                                        if table_name == "DT_TEPlayerAnimEvent"
-                                            && prop_name == "m_hPlayer"
-                                        {
-                                            let handle_id: u32 = match prop.value {
-                                        tf_demo_parser::demo::sendprop::SendPropValue::Integer(x) => x.try_into().unwrap_or_default(),
-                                        _ => {continue}
-                                    };
-                                            let entity_id =
-                                                crate::util::helpers::handle_to_entid(handle_id);
-                                            match state
-                                                .entid_to_userid
-                                                .get(&entity_id)
-                                                .and_then(|userid| state.userid_to_id64.get(userid))
-                                            {
-                                                Some(id64) => {
-                                                    self.player_data
-                                                        .entry(*id64)
-                                                        .or_default()
-                                                        .last_fire = tick.into();
-                                                }
-                                                None => continue,
-                                            };
-                                        }
-                                    }
-                                    None => {}
-                                }
-                            }
-                        }
-                        _ => continue,
                     }
                 }
             }

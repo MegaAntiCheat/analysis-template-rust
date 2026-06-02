@@ -4,7 +4,9 @@ pub use crate::algorithms::{
     viewangles_180degrees::ViewAngles180Degrees,
     viewangles_to_csv::ViewAnglesToCSV,
     write_to_file::WriteToFile,
-
+    angle_history::AngleHistory,
+    backtrack::BackTrack,
+    double_tap::DoubleTap,
     nocrex:: {
         aimsnap::AimSnap, 
         angle_repeat::AngleRepeat, 
@@ -24,7 +26,7 @@ pub use tf_demo_parser::{Demo, DemoParser, Parse, ParseError, ParserState, Strea
 
 use crate::{base::{cheat_analyser_base::CheatAnalyser, demo_handler_base::CheatDemoHandler}, dev_print};
 
-pub fn get_algorithms() -> Vec<Box<dyn CheatAlgorithm<'static>>> {
+pub fn get_algorithms() -> Vec<Box<dyn CheatAlgorithm<'static> + Send>> {
     vec![
         Box::new(AllMessages::new()),
         Box::new(ViewAngles180Degrees::new()),
@@ -32,11 +34,14 @@ pub fn get_algorithms() -> Vec<Box<dyn CheatAlgorithm<'static>>> {
         Box::new(WriteToFile::new()),
         Box::new(OOBPitch::new()),
         Box::new(AngleRepeat::new()),
+        Box::new(AngleHistory::new()),
         Box::new(AimSnap::new()),
+        Box::new(BackTrack::new()),
+        Box::new(DoubleTap::new()),
     ]
 }
 
-pub fn analyse<'a>(demo: &Demo, algorithms: Vec<Box<dyn CheatAlgorithm<'a>>>) -> anyhow::Result<CheatAnalyser<'a>> {
+pub fn analyse<'a>(demo: &Demo, algorithms: Vec<Box<dyn CheatAlgorithm<'a> + Send>>) -> anyhow::Result<CheatAnalyser<'a>> {
     let mut stream = demo.get_stream();
     let header: Header = Header::read(&mut stream)?;
     let mut packets = RawPacketStream::new(stream);

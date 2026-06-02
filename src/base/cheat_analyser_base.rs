@@ -343,7 +343,7 @@ lazy_static! {
 
 pub struct CheatAnalyser<'a> {
     pub state: CheatAnalyserState,
-    pub algorithms: Vec<Box<dyn CheatAlgorithm<'a> + 'a>>,
+    pub algorithms: Vec<Box<dyn CheatAlgorithm<'a> + 'a + Send>>,
     pub detections: Vec<Detection>,
     pub header: Option<Header>,
     pub tick: DemoTick,
@@ -503,7 +503,7 @@ impl BorrowMessageHandler for CheatAnalyser<'_> {
 }
 
 impl<'a> CheatAnalyser<'a> {
-    pub fn new(algorithms: Vec<Box<dyn CheatAlgorithm<'a> + 'a>>) -> Self {
+    pub fn new(algorithms: Vec<Box<dyn CheatAlgorithm<'a> + 'a + Send>>) -> Self {
         let mut message_types = HANDLED_MESSAGE_TYPES.lock().unwrap();
         // Figure out what message types we're going to be using.
         let mut specified_message_types: Vec<MessageType> = vec![];
@@ -634,6 +634,8 @@ impl<'a> CheatAnalyser<'a> {
     fn check_progress(&mut self) {
         const PROGRESS_UPDATE_INTERVAL_MS: u128 = 1000;
         const TPS_ROLLING_AVERAGE_WINDOW: u32 = 10;
+        crate::PROGRESS_CURRENT.store(self.tick.into(), std::sync::atomic::Ordering::Relaxed);
+        crate::PROGRESS_TOTAL.store(self.get_tick_count_u32(), std::sync::atomic::Ordering::Relaxed);
         if self.last_progress_update_time.elapsed().as_millis() < PROGRESS_UPDATE_INTERVAL_MS {
             return;
         }

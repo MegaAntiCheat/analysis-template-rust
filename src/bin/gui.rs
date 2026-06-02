@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 
-use analysis_template::{base::cheat_analyser_base::CheatAnalyser, lib::{algorithm::{analyse, get_algorithms, Detection}, parameters::{Parameter, Parameters}}};
+use analysis_template::{
+    base::cheat_analyser_base::CheatAnalyser,
+    lib::{
+        algorithm::{analyse, get_algorithms, Detection},
+        parameters::{Parameter, Parameters},
+    },
+};
 use eframe::egui;
 use itertools::Itertools;
 use tf_demo_parser::Demo;
@@ -19,7 +25,6 @@ fn main() -> eframe::Result {
     )
 }
 
-#[derive(Default)]
 struct Gui {
     algos: HashMap<String, bool>,
     params: HashMap<String, Parameters>,
@@ -30,6 +35,9 @@ struct Gui {
     selected_detection: Option<usize>,
 
     analyser: Option<CheatAnalyser<'static>>,
+
+    recv: std::sync::mpsc::Receiver<anyhow::Result<CheatAnalyser<'static>>>,
+    send: std::sync::mpsc::Sender<anyhow::Result<CheatAnalyser<'static>>>,
 }
 
 impl Gui {
@@ -41,9 +49,7 @@ impl Gui {
             }
         }
         if let Ok(data) = std::fs::read_to_string("params.json") {
-            if let Ok(saved_params) =
-                serde_json::from_str::<HashMap<String, Parameters>>(&data)
-            {
+            if let Ok(saved_params) = serde_json::from_str::<HashMap<String, Parameters>>(&data) {
                 for saved_algo in saved_params {
                     if let Some(algo) = params.get_mut(&saved_algo.0) {
                         for saved_param in saved_algo.1 {
@@ -55,6 +61,7 @@ impl Gui {
                 }
             }
         }
+        let (send, recv) = std::sync::mpsc::channel();
         Self {
             algos: HashMap::from_iter(
                 get_algorithms()
@@ -62,7 +69,14 @@ impl Gui {
                     .map(|a| (a.algorithm_name().to_string(), a.default())),
             ),
             params,
-            ..Default::default()
+            file: None,
+            processing: false,
+            detections: HashMap::new(),
+            selected_player: None,
+            selected_detection: None,
+            analyser: None,
+            recv,
+            send,
         }
     }
 
@@ -81,76 +95,109 @@ impl Gui {
             }
         }
 
-        let file = std::fs::read(self.file.as_ref().unwrap()).unwrap();
-        let demo: Demo = Demo::new(&file);
-        let analyser = analyse(&demo, algorithms).unwrap();
-        self.analyser = Some(analyser);
-        self.detections.clear();
-        for det in self.analyser.as_ref().unwrap().detections.clone() {
-            self.detections.entry(det.player).or_default().push(det);
-        }
-        self.analyser.as_ref().unwrap().print_detection_summary();
+        let file = self.file.clone().unwrap();
+        let send = self.send.clone();
+
+        std::thread::spawn(move || {
+            send.send((|| -> anyhow::Result<CheatAnalyser<'static>> {
+                let file = std::fs::read(&file)?;
+                let demo: Demo = Demo::new(&file);
+                Ok(analyse(&demo, algorithms)?)
+            })())
+            .unwrap();
+        });
+        self.processing = true;
     }
 }
 
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let hovered = !ctx.input(|i| i.raw.hovered_files.is_empty());
+        if !ctx.input(|i| i.raw.hovered_files.is_empty()) {
+            egui::Window::new("Hover")
+                .movable(false)
+                .title_bar(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, &[0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading("Drop to analyze");
+                });
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.processing {
                 ui.disable();
+                if let Ok(result) = self.recv.try_recv() {
+                    if let Err(e) = &result {
+                        println!("Error while parsing demo: {e:#?}");
+                    }
+                    self.analyser = result.ok();
+                    self.processing = false;
+                    self.detections.clear();
+                    for det in self.analyser.as_ref().unwrap().detections.clone() {
+                        self.detections.entry(det.player).or_default().push(det);
+                    }
+                    self.analyser.as_ref().unwrap().print_detection_summary();
+                }
             }
             ui.horizontal(|ui|{
+                let mut algo_to_configure = None;
                 ui.vertical(|ui|{
                     ui.heading("Algorithms");
                     for mut algo in self.algos.iter_mut().sorted_by_key(|a| a.0) {
-                        ui.checkbox(&mut algo.1, algo.0);
+                        ui.horizontal(|ui|{
+                            ui.checkbox(&mut algo.1, algo.0);
+                            if *algo.1 && self.params.get(algo.0).is_some_and(|p|!p.is_empty()) {
+                                if ui.small_button("⚙").clicked() {
+                                    algo_to_configure = Some(algo.0.clone());
+                                }
+                            }
+                        });
                     }
                 });
                 ui.add_space(10.0);
                 ui.separator();
                 ui.add_space(10.0);
-                ui.vertical(|ui|{
-                    ui.horizontal(|ui|{
-                        ui.heading("Parameters");
-                        if ui.button("Save").clicked(){
-                            std::fs::write("params.json", &serde_json::to_vec_pretty(&self.params).unwrap()).unwrap();
-                        }
-                    });
-                    ui.separator();
-                    for (name, params) in self.params.iter_mut().sorted_by_key(|a|a.0) {
-                        if !self.algos[name]{
-                            continue;
-                        }
-                        ui.add_space(10.0);
-                        ui.heading(name);
+                egui::ScrollArea::vertical().min_scrolled_height(300.0).show(ui, |ui|{
+                    ui.vertical(|ui|{
+                        ui.horizontal(|ui|{
+                            ui.heading("Parameters");
+                            if ui.button("Save").clicked(){
+                                std::fs::write("params.json", &serde_json::to_vec_pretty(&self.params).unwrap()).unwrap();
+                            }
+                        });
                         ui.separator();
-                        for param in params.iter_mut().sorted_by_key(|p|p.0){
-                            // ui.horizontal(|ui|{
-                            //     ui.add(egui::DragValue::new(param.1).max_decimals(50));
-                            //     ui.label(*param.0);
-                            // });
-                            match param.1 {
-                                Parameter::Float(f) => {
-                                   ui.horizontal(|ui|{
-                                       ui.add(egui::DragValue::new(f).speed(0.001).max_decimals(50));
-                                       ui.label(param.0);
-                                   });
-                                }
-                                Parameter::Int(i) => {
+                        for (name, params) in self.params.iter_mut().sorted_by_key(|a|a.0) {
+                            if !self.algos[name]{
+                                continue;
+                            }
+                            ui.add_space(10.0);
+                            let h = ui.heading(name);
+                            if algo_to_configure.as_ref().is_some_and(|n|*n == *name) {
+                                h.scroll_to_me(Some(egui::Align::TOP));
+                            }
+                            ui.separator();
+                            for param in params.iter_mut().sorted_by_key(|p|p.0){
+                                match param.1 {
+                                    Parameter::Float(f) => {
                                     ui.horizontal(|ui|{
-                                        ui.add(egui::DragValue::new(i).speed(1).max_decimals(0));
+                                        ui.add(egui::DragValue::new(f).speed(0.001).max_decimals(50));
                                         ui.label(param.0);
                                     });
-                                }
-                                Parameter::Bool(b) => {
-                                    ui.horizontal(|ui|{
-                                        ui.checkbox(b, param.0);
-                                    });
+                                    }
+                                    Parameter::Int(i) => {
+                                        ui.horizontal(|ui|{
+                                            ui.add(egui::DragValue::new(i).speed(1).max_decimals(0));
+                                            ui.label(param.0);
+                                        });
+                                    }
+                                    Parameter::Bool(b) => {
+                                        ui.horizontal(|ui|{
+                                            ui.checkbox(b, param.0);
+                                        });
+                                    }
                                 }
                             }
                         }
-                    }
+                    });
                 });
             });
             ui.add_space(10.0);
@@ -161,10 +208,9 @@ impl eframe::App for Gui {
                         .pick_file()
                     {
                         self.file = Some(path);
-                        self.analyse();
                     }
                 }
-                if self.file.is_some() {
+                ui.add_enabled_ui(self.file.is_some(), |ui|{
                     if ui.button("Analyse").clicked() {
                         self.analyse();
                     }
@@ -182,11 +228,17 @@ impl eframe::App for Gui {
                             }
                         }
                     }
-                }
-                if hovered {
-                    ui.label("Drop to analyse");
-                }
+                });
             });
+            if self.processing {
+                ui.horizontal(|ui|{
+                    ui.spinner();
+                    ui.label("Analysing...");
+                    let progress = analysis_template::PROGRESS_CURRENT.load(std::sync::atomic::Ordering::Relaxed);
+                    let total = analysis_template::PROGRESS_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+                    ui.add(egui::widgets::ProgressBar::new(progress as f32 / total as f32).show_percentage().text(format!("{} / {}", progress, total)));
+                });
+            }
             ui.add_space(10.0);
             if let Some(p) = &self.file {
                 ui.heading(p.file_name().unwrap().to_string_lossy());
@@ -197,6 +249,7 @@ impl eframe::App for Gui {
                 egui::ScrollArea::vertical()
                     .id_salt("players")
                     .show(ui, |ui| {
+                        ui.set_min_width(160.0);
                         ui.vertical(|ui| {
                             for player in self.detections.iter().sorted_by_key(|d| d.1.len()).rev()
                             {
@@ -221,6 +274,7 @@ impl eframe::App for Gui {
                 egui::ScrollArea::vertical()
                     .id_salt("detections")
                     .show(ui, |ui| {
+                        ui.set_min_width(160.0);
                         ui.vertical(|ui| {
                             if let Some(detections) =
                                 self.selected_player.and_then(|p| self.detections.get(&p))

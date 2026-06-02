@@ -1,9 +1,9 @@
-// Written by Nocrex
+// Written by Nocrex, Patched for Command Batching by Ciam
 
 use std::{collections::HashMap, ops::Range};
 
 use crate::{
-    base::cheat_analyser_base::{CheatAnalyserState, Player, PlayerState}, lib::parameters::get_parameter_value, util::{helpers::angle_delta, nocrex::jankguard::JankGuard}
+    base::cheat_analyser_base::{CheatAnalyserState, Player, PlayerState}, lib::parameters::get_parameter_value, util::{helpers::viewangle_delta, nocrex::jankguard::JankGuard}
 };
 use anyhow::Error;
 use serde_json::json;
@@ -15,7 +15,7 @@ use crate::lib::parameters::{Parameter, Parameters};
 
 #[derive(Default)]
 pub struct AimSnap {
-    ticks: Vec<HashMap<u64, Player>>,
+    ticks: Vec<(u32, HashMap<u64, Player>)>,
     jg: JankGuard,
     params: Parameters,
     detections: Vec<Detection>,
@@ -58,7 +58,7 @@ impl<'a> CheatAlgorithm<'a> for AimSnap {
 
         let noise_range: Range<f32> = noise_min..noise_max;
 
-        self.ticks.insert(0, HashMap::new());
+        self.ticks.insert(0, (ticknum, HashMap::new()));
         self.ticks.truncate(5);
 
         for player in players.iter().filter(|p| {
@@ -90,23 +90,31 @@ impl<'a> CheatAlgorithm<'a> for AimSnap {
             self.ticks
                 .get_mut(0)
                 .unwrap()
+                .1
                 .insert(steam_id.clone(), player.clone()); // Store angle for this tick for next ticks
 
-            let mut angles: Vec<_> = self
+            let angle_history: Vec<_> = self
                 .ticks
                 .iter()
-                .map(|m| m.get(&steam_id).map(|p| (p.view_angle, p.pitch_angle)))
+                .filter_map(|(t, m)| m.get(&steam_id).map(|p| (*t, p.view_angle, p.pitch_angle)))
                 .rev()
                 .collect();
 
-            if angles.iter().any(|o| o.is_none()) {
+            if angle_history.len() < self.ticks.len() {
                 continue;
             }
 
-            let angles: Vec<(f32, f32)> = angles.drain(..).map(|o| o.unwrap()).collect();
             let mut deltas = Vec::new();
-            for (a, b) in angles.iter().zip(angles.iter().skip(1)) {
-                deltas.push(angle_delta(*a, *b));
+            for window in angle_history.windows(2) {
+                let (t1, yaw1, pitch1) = window[0];
+                let (t2, yaw2, pitch2) = window[1];
+
+                let tick_delta = t2.saturating_sub(t1);
+
+                let (va_delta_real, pa_delta_real) = viewangle_delta(yaw2, pitch2, yaw1, pitch1, tick_delta);
+
+                let mag_delta = (va_delta_real * va_delta_real + pa_delta_real * pa_delta_real).sqrt();
+                deltas.push(mag_delta);
             }
 
             if noise_range.contains(deltas.first().unwrap())
