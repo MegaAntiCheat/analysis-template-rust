@@ -25,6 +25,8 @@ web-time = "1.1.0"
 
 eframe = { version = "0.31.1", optional = true }
 egui = { version = "0.31.1", optional = true }
+xz2 = "0.1.7"
+tar = "0.4.46"
 
 [features]
 gui = [ "eframe", "egui" ]

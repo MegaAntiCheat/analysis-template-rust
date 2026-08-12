@@ -653,10 +653,16 @@ impl<'a> CheatAnalyser<'a> {
             tick.into()
         };
 
+        let total = self.get_tick_count_u32();
+        let remaining_str = if tick >= total {
+            "?".to_string()
+        } else {
+            (total - tick).to_string()
+        };
         dev_print!(
             "Processing tick {} ({} remaining, {:.0} tps)",
             tick,
-            self.get_tick_count_u32() - tick,
+            remaining_str,
             tps
         );
     }

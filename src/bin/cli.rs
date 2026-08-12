@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs::{self}};
+use std::{collections::HashMap, env, fs::{self}, io::Read};
 use analysis_template::{dev_print, lib::{algorithm::{analyse, get_algorithms, CheatAlgorithm}, parameters::Parameters}, SILENT};
 
 use anyhow::Error;
@@ -8,6 +8,49 @@ pub use tf_demo_parser::{Demo, DemoParser, Parse, ParseError, ParserState, Strea
 
 
 use getopts::Options;
+
+/// XZ magic bytes: FD 37 7A 58 5A 00
+const XZ_MAGIC: [u8; 6] = [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00];
+
+/// Read a demo file, automatically decompressing if it's a tar.xz archive.
+fn read_demo_file(path: &str) -> Result<Vec<u8>, Error> {
+    let data = fs::read(path)?;
+    
+    // Check for XZ magic bytes
+    if data.starts_with(&XZ_MAGIC) {
+        dev_print!("Detected tar.xz archive, decompressing...");
+        
+        // Decompress the XZ stream
+        let mut decoder = xz2::read::XzDecoder::new(&data[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)?;
+        
+        // Parse the tar archive using the tar crate
+        let mut tar_archive = tar::Archive::new(&decompressed[..]);
+        for entry in tar_archive.entries()? {
+            let mut entry = entry?;
+            let name = entry.path()?.to_string_lossy().to_string();
+            
+            // Skip PaxHeader entries
+            if name.starts_with("PaxHeader") {
+                continue;
+            }
+            
+            dev_print!("Tar entry: {}", name);
+            
+            // Read the file data
+            let mut demo_data = Vec::new();
+            entry.read_to_end(&mut demo_data)?;
+            dev_print!("Extracted {} bytes from tar.xz", demo_data.len());
+            return Ok(demo_data);
+        }
+        
+        Err(anyhow::anyhow!("No data file found in tar archive"))
+    } else {
+        // Raw demo file
+        Ok(data)
+    }
+}
 
 fn main() -> Result<(), Error> {
     let start = std::time::Instant::now();
@@ -91,7 +134,7 @@ fn main() -> Result<(), Error> {
         panic!("No algorithms specified");
     }
 
-    let file = fs::read(demo_path)?;
+    let file = read_demo_file(&demo_path)?;
     let demo: Demo = Demo::new(&file);
     let analyser = analyse(&demo, algorithms)?;
 
