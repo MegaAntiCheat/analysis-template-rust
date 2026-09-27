@@ -57,6 +57,7 @@ fn main() -> Result<(), Error> {
 
     let mut opts = Options::new();
     opts.optopt("i", "input", "set input file path", "PATH");
+    opts.optopt("o", "output", "write the raw JSON output to a file (same output as -Q, minified if -q is also specified)", "PATH");
     opts.optflag("q", "quiet", "silence all output except for the final JSON string");
     opts.optflag("Q", "quiet-pretty", "same as -q, but with more human-readable json");
     opts.optmulti("a", "algorithm", "specify the algorithm to run. Include multiple -a flags to run multiple algorithms. If not specified, the default algorithms are run.", "ALGORITHM [-a ALGORITHM]...");
@@ -140,6 +141,19 @@ fn main() -> Result<(), Error> {
 
     if start.elapsed().as_secs() >= 10 {
         analyser.print_metadata();
+    }
+
+    // Write the raw JSON output to a file if -o was specified. This is the
+    // exact same output used for -Q (pretty), unless -q is specified, in which
+    // case it is minified in the same way as -q.
+    if let Some(output_path) = matches.opt_str("o") {
+        let json = if matches.opt_present("q") {
+            serde_json::to_string(&analyser.detection_json())
+        } else {
+            serde_json::to_string_pretty(&analyser.detection_json())
+        }
+        .expect("Failed to serialize analysis JSON");
+        fs::write(&output_path, json).expect("Failed to write output file");
     }
 
     if SILENT.load(std::sync::atomic::Ordering::Relaxed) {

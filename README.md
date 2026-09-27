@@ -112,7 +112,8 @@ The program accepts the following arguments:
 - `-c`: Print the number of detections instead of details for every detection. Overridden by `-q`.
 - `-h`: Print help information and exit.
 - `-i <path>`: Specify the path to the demo file to analyze. **This argument is required.**
-- `-p`: Provide a .json file with custom parameters. 
+- `-o <path>`: Write the raw JSON output to a file. The file contains the exact same output as `-Q` (pretty-printed), unless `-q` is also specified, in which case it is minified in the same way as `-q`.
+- `-p`: Provide a .json file with custom parameters.
 - `-q`: Silence all debug info, leaving only the detection output in stdout. Required for production use.
 - `-Q`: Same as `-q`, but prettifies the output. Convenient for manual inspection of the output.
 

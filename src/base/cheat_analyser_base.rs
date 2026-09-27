@@ -581,18 +581,22 @@ impl<'a> CheatAnalyser<'a> {
         dev_print!("Server: {}", header.server);
     }
 
-    pub fn print_detection_json(&self, pretty: bool) {
-        let analysis = serde_json::json!({
+    /// Builds the raw JSON object representing the analysis output.
+    pub fn detection_json(&self) -> serde_json::Value {
+        serde_json::json!({
             "server_ip": self.header.as_ref().map_or("unknown".to_string(), |h| h.server.clone()),
             "duration": self.tick,
             "author": self.header.as_ref().map_or("unknown".to_string(), |h| h.nick.clone()),
             "map": self.header.as_ref().map_or("unknown".to_string(), |h| h.map.clone()),
             "detections": self.detections
-        });
+        })
+    }
+
+    pub fn print_detection_json(&self, pretty: bool) {
         let json = if pretty {
-            serde_json::to_string_pretty(&analysis).unwrap()
+            serde_json::to_string_pretty(&self.detection_json()).unwrap()
         } else {
-            serde_json::to_string(&analysis).unwrap()
+            serde_json::to_string(&self.detection_json()).unwrap()
         };
         println!("{}", json);
     }
